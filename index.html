@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Postal Sticker PDF Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f3f5f7;color:#18212b}
+.container{max-width:1200px;margin:24px auto;padding:0 18px}.card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 4px 18px #00000012;margin-bottom:16px}
+h1{margin:0 0 6px;font-size:26px}h2{font-size:18px;margin:0 0 14px}.sub{color:#64707d;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.field{display:flex;flex-direction:column;gap:6px}.field.wide{grid-column:span 2}
+label{font-weight:700;font-size:13px}input,select,button{font:inherit}input,select{height:40px;border:1px solid #cbd3da;border-radius:8px;padding:0 10px;background:#fff}
+button{border:0;border-radius:9px;padding:11px 16px;font-weight:700;cursor:pointer}.primary{background:#d71920;color:#fff}.secondary{background:#e9edf1}.danger{background:#333;color:#fff}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.status{margin-top:12px;color:#53606c;font-size:14px}
+.previewWrap{display:flex;gap:20px;align-items:flex-start}.previewBox{width:360px;max-width:100%}
+.sticker{background:#fff;width:360px;aspect-ratio:9/16;border:1px solid #ddd;padding:27px 24px 18px;font-family:Arial,sans-serif;color:#050505;overflow:hidden}
+.s-customer{text-align:center;font-size:23px;font-weight:800;line-height:1.05}.s-service{text-align:center;font-size:20px;font-weight:700;text-decoration:underline;margin-top:4px}.s-cod{text-align:center;font-size:27px;font-weight:800;text-decoration:underline;text-decoration-thickness:1px;margin-top:2px}
+.s-amount{margin-top:30px;font-size:20px;font-weight:700;white-space:nowrap}.s-words{font-size:15px;font-weight:600;margin-top:8px;text-transform:uppercase;line-height:1.15}
+.s-title{font-size:27px;font-weight:500;margin-top:32px}.s-block{font-size:14px;font-weight:600;line-height:1.25;text-transform:uppercase;margin-top:6px}.s-from{margin-top:38px}.s-from .s-block{font-size:12.5px}
+.help{font-size:13px;color:#66737f;line-height:1.45}.mapping{margin-top:12px;font-size:12px;color:#596672}
+@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}.previewWrap{flex-direction:column}.previewBox{width:100%;max-width:360px}}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="card">
+    <h1>Postal Sticker → PDF Generator</h1>
+    <div class="sub">Upload an Excel file and generate one sticker page for every row, in the same portrait style as the sample.</div>
+    <div class="grid">
+      <div class="field wide"><label>Excel file</label><input id="file" type="file" accept=".xlsx,.xls,.csv"></div>
+      <div class="field"><label>Customer ID</label><input id="customerId" value="55124"></div>
+      <div class="field"><label>Service</label><input id="service" value="SPEED POST"></div>
+      <div class="field"><label>Sticker type</label><input id="stickerType" value="COD"></div>
+      <div class="field"><label>Page width (inches)</label><input id="pageW" type="number" step="0.01" value="4"></div>
+      <div class="field"><label>Page height (inches)</label><input id="pageH" type="number" step="0.01" value="7.11"></div>
+      <div class="field"><label>Preview row</label><input id="rowNo" type="number" min="1" value="1"></div>
+    </div>
+    <div class="actions">
+      <button class="secondary" id="loadBtn">Load Excel</button>
+      <button class="primary" id="pdfBtn">Generate PDF — one page per article</button>
+      <button class="secondary" id="previewBtn">Refresh Preview</button>
+    </div>
+    <div id="status" class="status">No Excel file loaded.</div>
+    <div id="mapping" class="mapping"></div>
+  </div>
+
+  <div class="card">
+    <h2>Preview</h2>
+    <div class="previewWrap">
+      <div class="previewBox"><div id="sticker" class="sticker"></div></div>
+      <div class="help">
+        <b>Expected Excel headers</b><br>
+        The utility is designed for the uploaded AONE format. It uses RECEIVER NAME, RECEIVER ADD LINE 1/2/3, RECEIVER CITY, RECEIVER STATE/UT, RECEIVER PINCODE, RECEIVER MOBILE NO, RECEIVER EMAILID, BARCODE NUMBER, CODR/COD, VALUE FOR CODR/COD, SENDER NAME, SENDER COMPANY NAME, SENDER ADD LINE 1/2/3, SENDER CITY, SENDER STATE/UT, SENDER PINCODE, SENDER EMAILID and SENDER ALT CONTACT.<br><br>
+        Extra headers are ignored. If a field is blank, that line is automatically omitted. Long names/addresses are wrapped and the PDF text is automatically reduced where necessary.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let rows=[];
+
+const $=id=>document.getElementById(id);
+function val(r,...keys){
+  for(const k of keys){
+    if(r[k]!==undefined && r[k]!==null && String(r[k]).trim()!=="") return String(r[k]).trim();
+  }
+  return "";
+}
+function money(n){
+  const x=Number(n); if(!Number.isFinite(x)) return "";
+  return x.toLocaleString("en-IN",{maximumFractionDigits:2});
+}
+function titleCase(s){return String(s||"").replace(/\s+/g," ").trim();}
+function numWords(n){
+  n=Math.round(Number(n)); if(!Number.isFinite(n)) return "";
+  if(n===0)return "ZERO";
+  const ones=["","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN","ELEVEN","TWELVE","THIRTEEN","FOURTEEN","FIFTEEN","SIXTEEN","SEVENTEEN","EIGHTEEN","NINETEEN"];
+  const tens=["","","TWENTY","THIRTY","FORTY","FIFTY","SIXTY","SEVENTY","EIGHTY","NINETY"];
+  function under100(x){return x<20?ones[x]:tens[Math.floor(x/10)]+(x%10?" "+ones[x%10]:"");}
+  function under1000(x){return x<100?under100(x):ones[Math.floor(x/100)]+" HUNDRED"+(x%100?" "+under100(x%100):"");}
+  let parts=[];
+  const cr=Math.floor(n/10000000); n%=10000000;
+  const lk=Math.floor(n/100000); n%=100000;
+  const th=Math.floor(n/1000); n%=1000;
+  if(cr)parts.push(under1000(cr)+" CRORE");
+  if(lk)parts.push(under1000(lk)+" LAKH");
+  if(th)parts.push(under1000(th)+" THOUSAND");
+  if(n)parts.push(under1000(n));
+  return parts.join(" ");
+}
+function build(r){
+  const name=val(r,"RECEIVER NAME","NAME");
+  const a1=val(r,"RECEIVER ADD LINE 1"),a2=val(r,"RECEIVER ADD LINE 2"),a3=val(r,"RECEIVER ADD LINE 3");
+  const city=val(r,"RECEIVER CITY"),state=val(r,"RECEIVER STATE/UT"),pin=val(r,"RECEIVER PINCODE");
+  const mob=val(r,"RECEIVER MOBILE NO"),email=val(r,"RECEIVER EMAILID");
+  const senderName=val(r,"SENDER NAME"),company=val(r,"SENDER COMPANY NAME");
+  const sa1=val(r,"SENDER ADD LINE 1"),sa2=val(r,"SENDER ADD LINE 2"),sa3=val(r,"SENDER ADD LINE 3");
+  const scity=val(r,"SENDER CITY"),sstate=val(r,"SENDER STATE/UT"),spin=val(r,"SENDER PINCODE");
+  const semail=val(r,"SENDER EMAILID"),salt=val(r,"SENDER ALT CONTACT");
+  const cod=val(r,"CODR/COD","COD TYPE");
+  const amount=val(r,"VALUE FOR CODR/COD","COD AMOUNT");
+  const barcode=val(r,"BARCODE NUMBER","BARCODE NO","ARTICLE NUMBER","ARTICLE NO","ARTICLE ID","BARCODE");
+  return {name,a1,a2,a3,city,state,pin,mob,email,senderName,company,sa1,sa2,sa3,scity,sstate,spin,semail,salt,cod,amount,barcode};
+}
+function esc(s){return String(s||"").replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));}
+function preview(){
+  if(!rows.length){$("sticker").innerHTML="<div style='padding:40px;text-align:center;color:#777'>Load Excel to preview.</div>";return}
+  const idx=Math.max(0,Math.min(rows.length-1,Number($("rowNo").value||1)-1)); $("rowNo").value=idx+1;
+  const d=build(rows[idx]), amount=Number(d.amount);
+  const receiver=[
+    d.name?`NAME - ${d.name}`:"",
+    d.company?`COMPANY - ${d.company}`:"",
+    d.a1,d.a2,d.a3,
+    d.city?`CITY - ${d.city}`:"",
+    d.state?`STATE - ${d.state}`:"",
+    d.pin?`PIN CODE - ${d.pin}`:"",
+    d.mob?`PH NO- ${d.mob}`:"",
+    d.email?`E-MAIL ID - ${d.email}`:""
+  ].filter(Boolean);
+  const sender=[
+    d.company?d.company:"",
+    d.senderName,
+    d.sa1,d.sa2,d.sa3,
+    [d.scity,d.sstate,d.spin].filter(Boolean).join(", "),
+    d.salt?`PHONE NO: ${d.salt}`:"",
+    d.semail?`E-MAIL ID - ${d.semail}`:""
+  ].filter(Boolean);
+  $("sticker").innerHTML=`
+    <div class="s-customer">CUSTOMER ID: ${esc($("customerId").value)}</div>
+    <div class="s-service">${esc($("service").value)}</div>
+    <div class="s-cod">${esc($("stickerType").value)}</div>
+    <div style="text-align:center;font-size:13px;font-weight:700;margin-top:5px;letter-spacing:.5px">${esc(d.barcode)}</div>
+    <div class="s-amount">COD AMOUNT:- RS. ${esc(money(amount))}/-</div>
+    <div class="s-words">${esc(numWords(amount))}</div>
+    <div class="s-title">TO:</div>
+    <div class="s-block">${receiver.map(esc).join("<br>")}</div>
+    <div class="s-title s-from">FROM:</div>
+    <div class="s-block">${sender.map(esc).join("<br>")}</div>`;
+}
+async function readExcel(){
+  const f=$("file").files[0]; if(!f){$("status").textContent="Please select an Excel file.";return}
+  $("status").textContent="Reading "+f.name+"…";
+  const data=await f.arrayBuffer();
+  const wb=XLSX.read(data,{type:"array",cellDates:true});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  rows=XLSX.utils.sheet_to_json(ws,{defval:""});
+  if(!rows.length){$("status").textContent="No data rows found.";return}
+  $("status").textContent=`Loaded ${rows.length.toLocaleString()} article(s) from sheet "${wb.SheetNames[0]}".`;
+  $("mapping").textContent="Detected headers: "+Object.keys(rows[0]).slice(0,10).join(" • ")+(Object.keys(rows[0]).length>10?" • …":"");
+  preview();
+}
+function wrapText(doc,text,maxWidth,fontSize,minSize=7){
+  let fs=fontSize; doc.setFontSize(fs);
+  while(fs>minSize && doc.getTextWidth(text)>maxWidth){fs-=0.4;doc.setFontSize(fs)}
+  return {fs,lines:doc.splitTextToSize(text,maxWidth)};
+}
+function drawLines(doc, lines, x, y, maxWidth, fs=11, leading=fs*1.18){
+  doc.setFontSize(fs);
+  for(const line of lines){doc.text(line,x,y);y+=leading}
+  return y;
+}
+function makePdf(){
+  if(!rows.length){alert("Please load an Excel file first.");return}
+  const {jsPDF}=window.jspdf;
+  const pw=Number($("pageW").value||4)*72, ph=Number($("pageH").value||7.11)*72;
+  const doc=new jsPDF({orientation:"portrait",unit:"pt",format:[pw,ph],compress:true});
+  const m=pw*0.07, max=pw-2*m;
+  rows.forEach((r,i)=>{
+    if(i)doc.addPage([pw,ph],"portrait");
+    const d=build(r), amount=Number(d.amount), customer=$("customerId").value, service=$("service").value, type=$("stickerType").value;
+    let y=35;
+    doc.setTextColor(0,0,0);doc.setFont("helvetica","bold");
+    let top=wrapText(doc,`CUSTOMER ID: ${customer}`,max,23,14);doc.text(top.lines,pw/2,y,{align:"center"});y+=top.lines.length*top.fs*1.05+3;
+    doc.setFontSize(20);doc.text(String(service).toUpperCase(),pw/2,y,{align:"center"});doc.line(pw/2-doc.getTextWidth(String(service).toUpperCase())/2,y+2,pw/2+doc.getTextWidth(String(service).toUpperCase())/2,y+2);y+=24;
+    doc.setFontSize(27);doc.text(String(type).toUpperCase(),pw/2,y,{align:"center"});const tw=doc.getTextWidth(String(type).toUpperCase());doc.line(pw/2-tw/2,y+2,pw/2+tw/2,y+2);y+=18;
+    doc.setFont("helvetica","bold");doc.setFontSize(13);doc.text(d.barcode,pw/2,y,{align:"center"});y+=25;
+    doc.setFontSize(20);doc.text(`COD AMOUNT:- RS. ${money(amount)}/-`,m,y);y+=19;
+    doc.setFontSize(15);let words=numWords(amount);let wl=doc.splitTextToSize(words,max);doc.text(wl,m,y);y+=wl.length*17+28;
+    doc.setFont("helvetica","normal");doc.setFontSize(27);doc.text("TO:",m,y);y+=27;
+    doc.setFont("helvetica","bold");doc.setFontSize(14);
+    const receiver=[
+      d.name?`NAME - ${d.name}`:"",
+      d.company?`COMPANY - ${d.company}`:"",
+      d.a1,d.a2,d.a3,
+      d.city?`CITY - ${d.city}`:"",
+      d.state?`STATE - ${d.state}`:"",
+      d.pin?`PIN CODE- ${d.pin}`:"",
+      d.mob?`PH NO- ${d.mob}`:"",
+      d.email?`E-MAIL ID - ${d.email}`:""
+    ].filter(Boolean);
+    for(const line of receiver){const z=wrapText(doc,line,max,14,9);doc.setFontSize(z.fs);doc.text(z.lines,m,y);y+=z.lines.length*z.fs*1.15+1}
+    y+=22;doc.setFont("helvetica","normal");doc.setFontSize(27);doc.text("FROM:",m,y);y+=27;
+    doc.setFont("helvetica","bold");doc.setFontSize(12.5);
+    const sender=[d.company,d.senderName,d.sa1,d.sa2,d.sa3,[d.scity,d.sstate,d.spin].filter(Boolean).join(", "),d.salt?`PHONE NO: ${d.salt}`:"",d.semail?`E-MAIL ID - ${d.semail}`:""].filter(Boolean);
+    for(const line of sender){const z=wrapText(doc,line,max,12.5,8.5);doc.setFontSize(z.fs);doc.text(z.lines,m,y);y+=z.lines.length*z.fs*1.12+1}
+    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.text(`Article ${i+1} of ${rows.length}`,pw-m,ph-8,{align:"right"});
+  });
+  const fname="Postal_Stickers_"+new Date().toISOString().slice(0,10)+".pdf";
+  doc.save(fname);
+  $("status").textContent=`PDF generated successfully: ${rows.length.toLocaleString()} page(s).`;
+}
+$("loadBtn").onclick=readExcel;
+$("pdfBtn").onclick=makePdf;
+$("previewBtn").onclick=preview;
+$("rowNo").oninput=preview;
+["customerId","service","stickerType"].forEach(id=>$(id).oninput=preview);
+$("file").addEventListener("change",()=>{rows=[];$("status").textContent="File selected. Click Load Excel.";});
+preview();
+</script>
+</body>
+</html>
